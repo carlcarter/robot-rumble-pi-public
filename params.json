@@ -1,0 +1,7 @@
+{
+  "max_speed": 0.6,
+  "turn_rate": 1.4,
+  "avoidance_radius_cm": 15,
+  "sensor_smoothing": false,
+  "motor_invert": false
+}
