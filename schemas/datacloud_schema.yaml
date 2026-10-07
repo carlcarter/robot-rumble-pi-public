@@ -1,0 +1,35 @@
+openapi: 3.0.3
+info:
+  title: Robot Rumble Telemetry
+  version: "1.0"
+components:
+  schemas:
+    RobotTelemetry:
+      type: object
+      properties:
+        event_id:
+          type: string
+        event_time:
+          type: string
+          format: date-time
+        robot_id:
+          type: string
+        speed:
+          type: number
+        heading:
+          type: number
+        battery:
+          type: number
+        collision:
+          type: boolean
+        active_hazard:
+          type: string
+        heat_number:
+          type: number
+    Robot:
+      type: object
+      properties:
+        robot_id:
+          type: string
+        robot_name:
+          type: string

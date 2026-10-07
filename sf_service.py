@@ -29,7 +29,7 @@ class CaseManager:
         Create a Case in Salesforce.
 
         Args:
-            robot_id: e.g. "EDI" or "LDN"
+            robot_id: e.g. "EDI" or "LON"
             description: what went wrong (e.g. "IMU deceleration spike; no forward progress for 3s")
             hazard: the active hazard name, if any (for the leaderboard metric "Fastest Fixers")
             heat_number: which heat this occurred in
@@ -56,6 +56,7 @@ class CaseManager:
             "Origin": "Robot",
             "Priority": "High",
             "Status": "New",
+            "Robot_ID__c": robot_id,
         }
 
         # Optional custom fields for metrics (adjust field names to your org).

@@ -92,7 +92,7 @@ def test_control_loop_params_reload():
             robot=robot,
             robot_id="TEST",
             params_file=params_file,
-            datacloud_ingest_url=None,
+            datacloud_enabled=False,
         )
 
         # Load initial

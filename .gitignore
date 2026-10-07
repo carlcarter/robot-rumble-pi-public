@@ -1,0 +1,41 @@
+# Secrets — never commit credentials or signing keys.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+.robot-rumble/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Backups
+*.bak
+*.orig

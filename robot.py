@@ -113,6 +113,10 @@ class FakeRobot(Robot):
         speed = self._speed
         heading = self._heading
 
+        # Stall detection: if no motion for 3+ seconds, mark as collision.
+        if time.time() - self._no_progress_since > 3.0:
+            self._collision = True
+
         # "Fog" hazard: inject sensor noise (but apply smoothing if param is set).
         if self._active_hazard == "fog":
             if not self._params.get("sensor_smoothing", False):

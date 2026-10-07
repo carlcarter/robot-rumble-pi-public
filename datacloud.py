@@ -6,7 +6,9 @@ Handles token exchange (Salesforce → Data Cloud) and batching.
 """
 
 import time
+import uuid
 import logging
+from datetime import datetime, timezone
 from typing import List
 import requests
 
@@ -25,13 +27,14 @@ class DataCloudIngestor:
     Refreshes the Data Cloud token on 401.
     """
 
-    def __init__(self, ingest_url: str):
+    def __init__(self, source_name: str, object_name: str):
         """
         Args:
-            ingest_url: full Ingestion API endpoint, e.g.
-                https://gnrdmpldh1zggzrtm74t8zrzg6.pc-rnd.c360a.salesforce.com/api/v1/ingest/sources/CONNECTOR/OBJECT
+            source_name: the Ingestion API connector name, e.g. "RobotTelemetry"
+            object_name: the schema object name within that connector, e.g. "RobotTelemetry"
         """
-        self.ingest_url = ingest_url
+        self.source_name = source_name
+        self.object_name = object_name
         self._batch: List[dict] = []
         self._last_flush = time.time()
         self._flush_interval = 1.0  # Flush every 1 second (a few per second max).
@@ -44,13 +47,16 @@ class DataCloudIngestor:
             telemetry: Telemetry dataclass from the robot
         """
         record = {
+            # Primary key: Data Cloud requires a true unique identifier per record.
+            "event_id": str(uuid.uuid4()),
+            # Engagement category requires a datetime field (ISO 8601).
+            "event_time": datetime.fromtimestamp(telemetry.ts, tz=timezone.utc).isoformat(),
             "robot_id": telemetry.robot_id,
-            "ts": telemetry.ts,
             "speed": telemetry.speed,
             "heading": telemetry.heading,
             "battery": telemetry.battery,
             "collision": telemetry.collision,
-            "active_hazard": telemetry.active_hazard,
+            "active_hazard": telemetry.active_hazard or "",
             "heat_number": telemetry.heat_number,
         }
         self._batch.append(record)
@@ -67,9 +73,9 @@ class DataCloudIngestor:
         auth = get_auth()
         dc_token, dc_instance_url = auth.get_datacloud_token()
 
-        # The ingest URL is typically separate from the Salesforce instance.
-        # e.g., gnrdmpldh1zggzrtm74t8zrzg6.pc-rnd.c360a.salesforce.com
-        url = self.ingest_url
+        # The Data Cloud tenant host is dynamic (can rotate) and comes back from the
+        # token exchange as `instance_url`. Never hardcode it; build the URL fresh each flush.
+        url = f"https://{dc_instance_url}/api/v1/ingest/sources/{self.source_name}/{self.object_name}"
 
         payload = {"data": self._batch}
 
@@ -101,10 +107,10 @@ class DataCloudIngestor:
 _ingestor: DataCloudIngestor = None
 
 
-def init_datacloud(ingest_url: str) -> None:
+def init_datacloud(source_name: str, object_name: str) -> None:
     """Initialize the DataCloudIngestor. Call once at startup."""
     global _ingestor
-    _ingestor = DataCloudIngestor(ingest_url)
+    _ingestor = DataCloudIngestor(source_name, object_name)
 
 
 def get_ingestor() -> DataCloudIngestor:

@@ -1,0 +1,22 @@
+{
+  "records": [
+    {
+      "masterLabel": "Robot Telemetry RT",
+      "developerName": "RobotTelemetryRT",
+      "category": "Other",
+      "externalDataTranFields": [
+        { "masterLabel": "eventId", "developerName": "eventId", "dataType": "Text", "isDataRequired": true, "primaryIndexOrder": 1 },
+        { "masterLabel": "eventType", "developerName": "eventType", "dataType": "Text", "isDataRequired": true },
+        { "masterLabel": "dateTime", "developerName": "dateTime", "dataType": "DateTime", "isDataRequired": true },
+        { "masterLabel": "category", "developerName": "category", "dataType": "Text", "isDataRequired": false },
+        { "masterLabel": "robotId", "developerName": "robotId", "dataType": "Text", "isDataRequired": true },
+        { "masterLabel": "speed", "developerName": "speed", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "heading", "developerName": "heading", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "battery", "developerName": "battery", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "collision", "developerName": "collision", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "activeHazard", "developerName": "activeHazard", "dataType": "Text", "isDataRequired": false },
+        { "masterLabel": "heatNumber", "developerName": "heatNumber", "dataType": "Number", "isDataRequired": false }
+      ]
+    }
+  ]
+}
