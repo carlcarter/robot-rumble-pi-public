@@ -96,7 +96,7 @@ Every setting is in `.env` (see `.env.example`). The important ones:
 | Variable | Purpose |
 | --- | --- |
 | `ROBOT_ID` | `EDI` or `LON` — identifies this robot everywhere |
-| `SF_MY_DOMAIN` | e.g. `trailsignup-xxxxx` (from `*.my.salesforce.com`) |
+| `SF_MY_DOMAIN` | your org's My Domain prefix (from `<prefix>.my.salesforce.com`) |
 | `SF_CLIENT_ID` / `SF_CLIENT_SECRET` | Client-credentials External Client App (Case creation + batch Data Cloud) |
 | `DATACLOUD_MODE` | `batch` (default), `s2s` (real-time), or `both` |
 | `S2S_CLIENT_ID` / `S2S_USERNAME` / `S2S_PRIVATE_KEY_PATH` / `S2S_APP_SOURCE_ID` | S2S real-time path — see [docs/s2s-setup.md](docs/s2s-setup.md) |
