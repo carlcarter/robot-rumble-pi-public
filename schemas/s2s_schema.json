@@ -9,13 +9,38 @@
         { "masterLabel": "eventType", "developerName": "eventType", "dataType": "Text", "isDataRequired": true },
         { "masterLabel": "dateTime", "developerName": "dateTime", "dataType": "DateTime", "isDataRequired": true },
         { "masterLabel": "category", "developerName": "category", "dataType": "Text", "isDataRequired": false },
+
         { "masterLabel": "robotId", "developerName": "robotId", "dataType": "Text", "isDataRequired": true },
+        { "masterLabel": "heatNumber", "developerName": "heatNumber", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "collision", "developerName": "collision", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "activeHazard", "developerName": "activeHazard", "dataType": "Text", "isDataRequired": false },
+        { "masterLabel": "isMalfunctioning", "developerName": "isMalfunctioning", "dataType": "Number", "isDataRequired": false },
+
         { "masterLabel": "speed", "developerName": "speed", "dataType": "Number", "isDataRequired": false },
         { "masterLabel": "heading", "developerName": "heading", "dataType": "Number", "isDataRequired": false },
         { "masterLabel": "battery", "developerName": "battery", "dataType": "Number", "isDataRequired": false },
-        { "masterLabel": "collision", "developerName": "collision", "dataType": "Number", "isDataRequired": false },
-        { "masterLabel": "activeHazard", "developerName": "activeHazard", "dataType": "Text", "isDataRequired": false },
-        { "masterLabel": "heatNumber", "developerName": "heatNumber", "dataType": "Number", "isDataRequired": false }
+
+        { "masterLabel": "accelX", "developerName": "accelX", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "accelY", "developerName": "accelY", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "accelZ", "developerName": "accelZ", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "gyroX", "developerName": "gyroX", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "gyroY", "developerName": "gyroY", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "gyroZ", "developerName": "gyroZ", "dataType": "Number", "isDataRequired": false },
+
+        { "masterLabel": "locatorX", "developerName": "locatorX", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "locatorY", "developerName": "locatorY", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "velocityX", "developerName": "velocityX", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "velocityY", "developerName": "velocityY", "dataType": "Number", "isDataRequired": false },
+
+        { "masterLabel": "colourR", "developerName": "colourR", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "colourG", "developerName": "colourG", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "colourB", "developerName": "colourB", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "colourName", "developerName": "colourName", "dataType": "Text", "isDataRequired": false },
+        { "masterLabel": "ambientLight", "developerName": "ambientLight", "dataType": "Number", "isDataRequired": false },
+
+        { "masterLabel": "motorCurrentLeft", "developerName": "motorCurrentLeft", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "motorCurrentRight", "developerName": "motorCurrentRight", "dataType": "Number", "isDataRequired": false },
+        { "masterLabel": "temperatureC", "developerName": "temperatureC", "dataType": "Number", "isDataRequired": false }
       ]
     }
   ]

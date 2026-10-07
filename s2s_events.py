@@ -49,20 +49,53 @@ def build_event(telemetry: Telemetry) -> dict:
     Convert a Telemetry sample into an S2S event.
 
     Field names are camelCase because S2S developer names are alphanumeric only.
-    The schema has no Boolean type, so collision is sent as 0/1.
+    The schema has no Boolean type, so collision/isMalfunctioning are sent as 0/1.
     """
     return {
         "eventId": str(uuid.uuid4()),
         "eventType": EVENT_TYPE,
         "category": EVENT_CATEGORY,
         "dateTime": _iso_millis(telemetry.ts),
+
+        # Identity + state
         "robotId": telemetry.robot_id,
+        "heatNumber": telemetry.heat_number,
+        "collision": 1 if telemetry.collision else 0,
+        "activeHazard": telemetry.active_hazard or "",
+        "isMalfunctioning": 1 if telemetry.is_malfunctioning else 0,
+
+        # Headline motion
         "speed": telemetry.speed,
         "heading": telemetry.heading,
         "battery": telemetry.battery,
-        "collision": 1 if telemetry.collision else 0,
-        "activeHazard": telemetry.active_hazard or "",
-        "heatNumber": telemetry.heat_number,
+
+        # IMU
+        "accelX": telemetry.accel_x,
+        "accelY": telemetry.accel_y,
+        "accelZ": telemetry.accel_z,
+        "gyroX": telemetry.gyro_x,
+        "gyroY": telemetry.gyro_y,
+        "gyroZ": telemetry.gyro_z,
+        # NOTE: attitudePitch/Roll/Yaw temporarily omitted — see docs/deferred-telemetry-fields.md
+
+        # Locator
+        "locatorX": telemetry.locator_x,
+        "locatorY": telemetry.locator_y,
+        "velocityX": telemetry.velocity_x,
+        "velocityY": telemetry.velocity_y,
+
+        # Vision / environment
+        "colourR": telemetry.colour_r,
+        "colourG": telemetry.colour_g,
+        "colourB": telemetry.colour_b,
+        "colourName": telemetry.colour_name,
+        "ambientLight": telemetry.ambient_light,
+
+        # Power / health
+        # NOTE: voltage temporarily omitted — see docs/deferred-telemetry-fields.md
+        "motorCurrentLeft": telemetry.motor_current_left,
+        "motorCurrentRight": telemetry.motor_current_right,
+        "temperatureC": telemetry.temperature_c,
     }
 
 

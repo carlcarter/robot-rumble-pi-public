@@ -51,13 +51,48 @@ class DataCloudIngestor:
             "event_id": str(uuid.uuid4()),
             # Engagement category requires a datetime field (ISO 8601).
             "event_time": datetime.fromtimestamp(telemetry.ts, tz=timezone.utc).isoformat(),
+
+            # Identity + state
             "robot_id": telemetry.robot_id,
+            "heat_number": telemetry.heat_number,
+            "collision": telemetry.collision,
+            "active_hazard": telemetry.active_hazard or "",
+            "is_malfunctioning": telemetry.is_malfunctioning,
+
+            # Headline motion
             "speed": telemetry.speed,
             "heading": telemetry.heading,
             "battery": telemetry.battery,
-            "collision": telemetry.collision,
-            "active_hazard": telemetry.active_hazard or "",
-            "heat_number": telemetry.heat_number,
+
+            # IMU
+            "accel_x": telemetry.accel_x,
+            "accel_y": telemetry.accel_y,
+            "accel_z": telemetry.accel_z,
+            "gyro_x": telemetry.gyro_x,
+            "gyro_y": telemetry.gyro_y,
+            "gyro_z": telemetry.gyro_z,
+            "attitude_pitch": telemetry.attitude_pitch,
+            "attitude_roll": telemetry.attitude_roll,
+            "attitude_yaw": telemetry.attitude_yaw,
+
+            # Locator
+            "locator_x": telemetry.locator_x,
+            "locator_y": telemetry.locator_y,
+            "velocity_x": telemetry.velocity_x,
+            "velocity_y": telemetry.velocity_y,
+
+            # Vision / environment
+            "colour_r": telemetry.colour_r,
+            "colour_g": telemetry.colour_g,
+            "colour_b": telemetry.colour_b,
+            "colour_name": telemetry.colour_name,
+            "ambient_light": telemetry.ambient_light,
+
+            # Power / health
+            "voltage": telemetry.voltage,
+            "motor_current_left": telemetry.motor_current_left,
+            "motor_current_right": telemetry.motor_current_right,
+            "temperature_c": telemetry.temperature_c,
         }
         self._batch.append(record)
 

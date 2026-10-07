@@ -50,6 +50,52 @@ def test_build_event_shape():
     assert event["heatNumber"] == 2
 
 
+def test_build_event_matches_the_30_field_s2s_schema():
+    """
+    S2S payload keys must match schemas/s2s_schema.json exactly — an undeclared
+    field is a 400, and Data Cloud caps the event at 30 fields.
+    attitudePitch/Roll/Yaw and voltage are deliberately held back; see
+    docs/deferred-telemetry-fields.md.
+    """
+    event = build_event(make_telemetry())
+    expected_keys = {
+        "eventId", "eventType", "dateTime", "category",
+        "robotId", "heatNumber", "collision", "activeHazard", "isMalfunctioning",
+        "speed", "heading", "battery",
+        "accelX", "accelY", "accelZ",
+        "gyroX", "gyroY", "gyroZ",
+        "locatorX", "locatorY", "velocityX", "velocityY",
+        "colourR", "colourG", "colourB", "colourName", "ambientLight",
+        "motorCurrentLeft", "motorCurrentRight", "temperatureC",
+    }
+    assert set(event.keys()) == expected_keys
+    assert len(event) == 30
+
+    # The deferred fields must NOT be present (they'd be undeclared -> 400)
+    for absent in ("attitudePitch", "attitudeRoll", "attitudeYaw", "voltage"):
+        assert absent not in event
+
+
+def test_s2s_event_keys_match_schema_file():
+    """Guard against drift between build_event() and the uploaded schema JSON."""
+    import json
+    from pathlib import Path
+
+    schema = json.loads((Path(__file__).parent.parent / "schemas" / "s2s_schema.json").read_text())
+    declared = {f["developerName"] for f in schema["records"][0]["externalDataTranFields"]}
+    event_keys = set(build_event(make_telemetry()).keys())
+    # Every key we send must be declared in the schema (category/eventType are declared too)
+    assert event_keys == declared
+
+
+def test_build_event_booleans_are_numeric():
+    """Both collision and isMalfunctioning become 0/1 — S2S schema has no Boolean."""
+    on = build_event(make_telemetry(collision=True))
+    off = build_event(make_telemetry(collision=False))
+    assert on["collision"] == 1 and off["collision"] == 0
+    assert on["isMalfunctioning"] in (0, 1)
+
+
 def test_build_event_datetime_is_millisecond_iso8601():
     event = build_event(make_telemetry())
     # S2S accepts only yyyy-MM-dd'T'HH:mm:ss.SSS'Z'

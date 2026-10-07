@@ -1,35 +1,54 @@
 openapi: 3.0.3
 info:
   title: Robot Rumble Telemetry
-  version: "1.0"
+  version: "2.0"
 components:
   schemas:
     RobotTelemetry:
       type: object
       properties:
-        event_id:
-          type: string
-        event_time:
-          type: string
-          format: date-time
-        robot_id:
-          type: string
-        speed:
-          type: number
-        heading:
-          type: number
-        battery:
-          type: number
-        collision:
-          type: boolean
-        active_hazard:
-          type: string
-        heat_number:
-          type: number
-    Robot:
-      type: object
-      properties:
-        robot_id:
-          type: string
-        robot_name:
-          type: string
+        # Identity + time
+        event_id: { type: string }
+        event_time: { type: string, format: date-time }
+        robot_id: { type: string }
+        heat_number: { type: number }
+
+        # State
+        collision: { type: boolean }
+        active_hazard: { type: string }
+        is_malfunctioning: { type: boolean }
+
+        # Headline motion
+        speed: { type: number }
+        heading: { type: number }
+        battery: { type: number }
+
+        # IMU
+        accel_x: { type: number }
+        accel_y: { type: number }
+        accel_z: { type: number }
+        gyro_x: { type: number }
+        gyro_y: { type: number }
+        gyro_z: { type: number }
+        attitude_pitch: { type: number }
+        attitude_roll: { type: number }
+        attitude_yaw: { type: number }
+
+        # Locator (encoder-based odometry)
+        locator_x: { type: number }
+        locator_y: { type: number }
+        velocity_x: { type: number }
+        velocity_y: { type: number }
+
+        # Vision / environment
+        colour_r: { type: number }
+        colour_g: { type: number }
+        colour_b: { type: number }
+        colour_name: { type: string }
+        ambient_light: { type: number }
+
+        # Power / health
+        voltage: { type: number }
+        motor_current_left: { type: number }
+        motor_current_right: { type: number }
+        temperature_c: { type: number }

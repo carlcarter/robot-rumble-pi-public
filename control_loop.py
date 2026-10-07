@@ -26,6 +26,15 @@ from s2s_events import init_s2s, get_s2s_ingestor
 logger = logging.getLogger(__name__)
 
 
+def _auth_is_configured(sf_domain, sf_client_id, sf_client_secret, placeholders) -> bool:
+    """True only if all three SF credentials are present and not left as placeholders."""
+    return (
+        bool(sf_domain) and sf_domain not in placeholders
+        and bool(sf_client_id) and sf_client_id not in placeholders
+        and bool(sf_client_secret) and sf_client_secret not in placeholders
+    )
+
+
 class ControlLoop:
     """Main robot control loop."""
 
@@ -37,6 +46,7 @@ class ControlLoop:
         datacloud_enabled: bool = False,
         datacloud_send_interval_ms: int = 100,
         s2s_enabled: bool = False,
+        cruise_speed: float = 0.5,
     ):
         """
         Args:
@@ -57,11 +67,13 @@ class ControlLoop:
         self.datacloud_enabled = datacloud_enabled
         self.datacloud_send_interval_s = datacloud_send_interval_ms / 1000.0
         self.s2s_enabled = s2s_enabled
+        self.cruise_speed = cruise_speed
 
         self._running = False
         self._last_params_mtime = 0.0
         self._collision_cooldown_until = 0.0
         self._last_datacloud_send = 0.0
+        self._last_telemetry = None
 
     def load_params(self) -> dict:
         """Load params.json. Handles missing file gracefully."""
@@ -111,8 +123,19 @@ class ControlLoop:
     def _tick(self, iteration: int) -> None:
         """Single iteration of the control loop."""
 
+        # 0. Drive. Until the line-follower (line_follower.py) is wired in, issue a
+        #    steady cruise so the robot actually moves — otherwise FakeRobot's
+        #    scripted route never advances and every telemetry sample reads zero.
+        #    A malfunctioning robot holds position until the hazard is cleared.
+        last = getattr(self, "_last_telemetry", None)
+        if last is not None and last.is_malfunctioning:
+            self.robot.stop()
+        else:
+            self.robot.drive(self.cruise_speed, 0.0)
+
         # 1. Read telemetry
         telemetry = self.robot.telemetry()
+        self._last_telemetry = telemetry
 
         # Log telemetry every 20 iterations (once/sec at 20 Hz) for visibility
         if iteration % 20 == 0:
@@ -218,14 +241,7 @@ def main():
     # Skip Salesforce if credentials are missing or still placeholders
     placeholder_values = {"mycompany", "your_client_id_here", "your_client_secret_here", ""}
 
-    if (
-        not sf_domain
-        or sf_domain in placeholder_values
-        or not sf_client_id
-        or sf_client_id in placeholder_values
-        or not sf_client_secret
-        or sf_client_secret in placeholder_values
-    ):
+    if not _auth_is_configured(sf_domain, sf_client_id, sf_client_secret, placeholder_values):
         logger.info("Salesforce credentials not configured; running in offline mode")
         logger.info("  To enable: edit .env with real SF_MY_DOMAIN, SF_CLIENT_ID, SF_CLIENT_SECRET")
     else:
@@ -282,12 +298,41 @@ def main():
             s2s_enabled = True
             logger.info(f"S2S real-time ingestion enabled (mode={dc_mode})")
 
-    # Create a fake robot for testing
+    # Pick the robot implementation. Defaults to the representative simulator;
+    # the Pi sets ROBOT_HARDWARE=sphero once the RVR+ is wired up.
     robot_id = os.getenv("ROBOT_ID", "TEST")
-    robot = FakeRobot(robot_id=robot_id)
+    hardware = os.getenv("ROBOT_HARDWARE", "fake").strip().lower()
+    if hardware == "sphero":
+        from robot import SpheroRobot  # imported lazily: needs the Sphero SDK (Pi only)
+        robot = SpheroRobot(robot_id=robot_id)
+        logger.info("Using SpheroRobot (real hardware)")
+    else:
+        robot = FakeRobot(robot_id=robot_id)
+        logger.info("Using FakeRobot (representative simulator)")
 
     # Params file
     params_file = Path(__file__).parent / "params.json"
+
+    # Command subscriber: listen for Robot_Command__e (the /fix loop) and clear the
+    # robot's hazard when told to. Needs SF auth; on by default when auth is configured,
+    # disable with COMMAND_SUBSCRIBER_ENABLED=false.
+    subscriber = None
+    cmd_sub_enabled = os.getenv("COMMAND_SUBSCRIBER_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+    if cmd_sub_enabled and _auth_is_configured(sf_domain, sf_client_id, sf_client_secret, placeholder_values):
+        try:
+            from command_subscriber import CommandSubscriber
+
+            def token_provider():
+                # Streaming API uses a core SF token + the My Domain instance URL.
+                return (
+                    get_auth().get_salesforce_token(),
+                    f"https://{sf_domain}.my.salesforce.com",
+                )
+
+            subscriber = CommandSubscriber(robot=robot, robot_id=robot_id, token_provider=token_provider)
+            subscriber.start()
+        except Exception as e:
+            logger.error(f"Could not start command subscriber: {e}")
 
     # Create and run the loop
     loop = ControlLoop(
@@ -299,8 +344,12 @@ def main():
         s2s_enabled=s2s_enabled,
     )
 
-    # For Mac testing: run 100 iterations (5 seconds at 20 Hz)
-    loop.run(max_iterations=100)
+    # MAX_ITERATIONS controls run length: a positive number stops after that many
+    # ticks (default 100 = ~5 s at 20 Hz, handy for a quick Mac smoke test), while
+    # MAX_ITERATIONS=0 runs until Ctrl+C — needed to watch the robot drive a full
+    # lap and hit hazards.
+    max_iterations = int(os.getenv("MAX_ITERATIONS", "100")) or None
+    loop.run(max_iterations=max_iterations)
 
 
 if __name__ == "__main__":

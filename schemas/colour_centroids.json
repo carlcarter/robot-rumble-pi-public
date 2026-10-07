@@ -1,0 +1,12 @@
+{
+  "_comment": "Nearest-centroid colour classifier reference points. (r,g,b) each 0-255. Default values are sensible until tools/calibrate_colours.py recalibrates against real tape and cards under venue lighting.",
+  "centroids": {
+    "blue":    [40,  60,  220],
+    "red":     [220, 40,  40],
+    "green":   [40,  200, 60],
+    "yellow":  [230, 210, 40],
+    "black":   [20,  20,  20],
+    "white":   [230, 230, 230]
+  },
+  "unknown_distance_threshold": 90
+}
