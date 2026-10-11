@@ -25,13 +25,16 @@ from colour import ColourClassifier
 # but don't halt it; the colour-card hazards do.
 _HALTING_HAZARDS = {"red_card", "yellow_card", "green_card", "rush_hour", "blackout"}
 
-# Colour-sensor samples at the moment a hazard card is "under" the robot.
-# RGB values are deliberately offset from the ideal centroid so the classifier
-# still has to do a little work.
-_HAZARD_CARD_COLOURS = {
-    "red_card":    (215, 50,  45),
-    "yellow_card": (225, 205, 55),
-    "green_card":  (50,  195, 70),
+# Blue line tape the robot follows (sensor RGB, before noise). Classifies "blue".
+_LINE_TAPE_RGB = (42, 65, 215)
+
+# Colour-sensor RGB for each coloured-paper patch on the course. Deliberately
+# offset from the ideal centroid so the classifier still has to do a little work;
+# these classify to "red" / "yellow" / "green" respectively.
+_PATCH_RGB = {
+    "red":    (215, 50,  45),
+    "yellow": (225, 205, 55),
+    "green":  (50,  195, 70),
 }
 
 
@@ -140,14 +143,17 @@ class FakeRobot(Robot):
     _VOLTAGE_FULL = 16.0
     _VOLTAGE_EMPTY = 14.5
 
-    # Where on the figure-8 (phase 0..1) each hazard card sits. Picked so EDI
-    # and LON hit hazards at different moments if they share a seed.
-    _HAZARD_WAYPOINTS = [
-        (0.18, "red_card"),
-        (0.45, "yellow_card"),
-        (0.72, "green_card"),
+    # Where on the figure-8 (phase 0..1) each coloured-paper PATCH sits on the
+    # course. The sensor reads that colour while the robot is over the patch; the
+    # control loop's line follower is what decides to raise an issue. The patch
+    # window is wide enough to span several ticks so detection's confirm-samples
+    # logic is genuinely exercised.
+    _PATCH_WAYPOINTS = [
+        (0.18, "red"),
+        (0.45, "yellow"),
+        (0.72, "green"),
     ]
-    _HAZARD_WINDOW = 0.015                # how long (in phase units) the card sits
+    _PATCH_WINDOW = 0.02                  # how long (in phase units) the patch sits under the sensor
 
     def __init__(self, robot_id: str = "TEST", seed: Optional[int] = None):
         self.robot_id = robot_id
@@ -174,7 +180,6 @@ class FakeRobot(Robot):
         # Fault state
         self._collision_pulse = False     # one-tick flag
         self._active_hazard: Optional[str] = None
-        self._fired_hazards_this_lap: set = set()
         self._lap_count = 0
         self._heat_number = 1
 
@@ -225,10 +230,11 @@ class FakeRobot(Robot):
 
         self._advance_phase(dt)
         self._integrate_motion(dt)
-        self._maybe_fire_scripted_hazard()
 
-        # Colour sample depends on where we are on the loop and whether a hazard
-        # card is currently "under" the sensor.
+        # Colour sample depends on where we are on the course: the blue line most
+        # of the time, a coloured-paper patch when the route is over one. The
+        # control loop detects the patch colour and decides to raise an issue —
+        # the robot no longer fires hazards itself.
         r, g, b = self._sample_colour()
         colour_name = self._colour_classifier.classify(r, g, b)
 
@@ -298,10 +304,9 @@ class FakeRobot(Robot):
         # When halted the phase freezes — the robot stops dead on the tape
         if self._is_malfunctioning() or self._cmd_speed == 0.0:
             return
-        self._phase = (self._phase + dt / self._FIGURE_8_PERIOD_S) % 1.0
-        # Each wrap starts a new lap; reset the "already fired this lap" set
-        if self._phase < 0.01 and self._fired_hazards_this_lap:
-            self._fired_hazards_this_lap.clear()
+        prev = self._phase
+        self._phase = (prev + dt / self._FIGURE_8_PERIOD_S) % 1.0
+        if self._phase < prev:   # wrapped → new lap
             self._lap_count += 1
 
     def _integrate_motion(self, dt: float) -> None:
@@ -321,25 +326,17 @@ class FakeRobot(Robot):
         if abs(self._vel_x) + abs(self._vel_y) > 1e-3:
             self._yaw_deg = math.degrees(math.atan2(self._vel_y, self._vel_x)) % 360.0
 
-    def _maybe_fire_scripted_hazard(self) -> None:
-        if self._active_hazard is not None:
-            return
-        for phase, hazard_name in self._HAZARD_WAYPOINTS:
-            if hazard_name in self._fired_hazards_this_lap:
-                continue
-            if abs(self._phase - phase) < self._HAZARD_WINDOW:
-                self._active_hazard = hazard_name
-                self._collision_pulse = True
-                self._fired_hazards_this_lap.add(hazard_name)
-                return
+    def _current_patch_colour(self) -> Optional[str]:
+        """Which coloured-paper patch (if any) is under the sensor at this phase."""
+        for phase, colour in self._PATCH_WAYPOINTS:
+            if abs(self._phase - phase) < self._PATCH_WINDOW:
+                return colour
+        return None
 
     def _sample_colour(self) -> tuple:
-        """Return (r,g,b) the colour sensor sees right now."""
-        if self._active_hazard in _HAZARD_CARD_COLOURS:
-            base = _HAZARD_CARD_COLOURS[self._active_hazard]
-        else:
-            # Blue tape, with sensor noise
-            base = (42, 65, 215)
+        """Return (r,g,b) the colour sensor sees right now — blue line, or a patch."""
+        patch = self._current_patch_colour()
+        base = _PATCH_RGB[patch] if patch else _LINE_TAPE_RGB
         noise = lambda: int(self._rng.gauss(0, 6))
         return (
             max(0, min(255, base[0] + noise())),
@@ -354,3 +351,171 @@ class FakeRobot(Robot):
 
     def _voltage_from_battery(self, pct: float) -> float:
         return self._VOLTAGE_EMPTY + (self._VOLTAGE_FULL - self._VOLTAGE_EMPTY) * (pct / 100.0)
+
+
+# ============================================================================
+# SpheroRobot — real RVR+ over UART.
+#
+# !!! UNTESTED SCAFFOLDING !!!
+# Written against the Sphero SDK docs before the hardware arrived. It will almost
+# certainly need adjustment on the real robot — especially the sensor-streaming
+# field names and the exact drive call. Do NOT assume this works until it has run
+# on an RVR+. The hardware-agnostic logic (line_follower.py, control_loop.py) is
+# fully tested; this class is the only unverified part.
+#
+# Known gotcha (see memory [[robot-rumble-state]]): the Sphero SDK calls
+# asyncio.get_event_loop().run_until_complete() at import/init time, which fails
+# on Python 3.14 and on modern Pi OS (Debian Trixie, Python 3.13+). Use the Pi 4
+# image documented in docs/pi-hardware-setup.md (Bookworm) and the pinned deps.
+# ============================================================================
+class SpheroRobot(Robot):
+    """
+    Real Sphero RVR+ driven over the Pi's UART (/dev/serial0) via the Sphero SDK's
+    synchronous observer (`SpheroRvrObserver`).
+
+    Design mirrors FakeRobot's contract exactly so control_loop.py and
+    line_follower.py are unchanged between sim and hardware. Telemetry is assembled
+    from the SDK's sensor-streaming callbacks (colour, IMU, locator, accelerometer)
+    plus battery polling; colour is classified with the same ColourClassifier so the
+    line-follow / patch-detection logic sees identical colour_name values.
+    """
+
+    # RVR nominal speed in m/s at full drive, used to scale our 0..1 speed command
+    # onto the SDK's 0..255 byte. Tune on hardware.
+    _SDK_MAX_SPEED_BYTE = 255
+
+    def __init__(self, robot_id: str = "EDI"):
+        # Import lazily so the module only needs the SDK on the Pi, not in tests/CI.
+        from sphero_sdk import SpheroRvrObserver  # noqa: F401
+
+        self.robot_id = robot_id
+        self._classifier = ColourClassifier()
+        self._started_at = time.time()
+        self._heat_number = 1
+
+        # Latest sensor values, updated by streaming callbacks.
+        self._sensor = {}
+        self._active_hazard: Optional[str] = None
+        self._battery_pct = 100.0
+
+        self._rvr = SpheroRvrObserver()
+        self._wake_and_stream()
+
+    # ---------- setup ----------
+
+    def _wake_and_stream(self) -> None:
+        """Wake the RVR and subscribe to the sensor streams we need."""
+        self._rvr.wake()
+        time.sleep(2)  # SDK needs a moment after wake
+        self._rvr.reset_yaw()
+
+        # Register handlers, then enable streaming. Exact sensor ids / field names
+        # per the SDK's RvrStreamingServices — VERIFY ON HARDWARE.
+        self._rvr.sensor_control.add_sensor_data_handler(
+            service="ColorDetection", handler=self._on_colour
+        )
+        self._rvr.sensor_control.add_sensor_data_handler(
+            service="Locator", handler=self._on_locator
+        )
+        self._rvr.sensor_control.add_sensor_data_handler(
+            service="IMU", handler=self._on_imu
+        )
+        self._rvr.sensor_control.add_sensor_data_handler(
+            service="Accelerometer", handler=self._on_accel
+        )
+        self._rvr.enable_color_detection(is_enabled=True)
+        self._rvr.sensor_control.start(interval=50)  # ms → 20 Hz
+
+    # ---------- streaming callbacks ----------
+
+    def _on_colour(self, data):
+        # Expected shape (verify): {"ColorDetection": {"R":..,"G":..,"B":..}}
+        c = data.get("ColorDetection", data)
+        self._sensor["colour"] = (int(c.get("R", 0)), int(c.get("G", 0)), int(c.get("B", 0)))
+
+    def _on_locator(self, data):
+        loc = data.get("Locator", data)
+        self._sensor["locator"] = (float(loc.get("X", 0.0)), float(loc.get("Y", 0.0)))
+
+    def _on_imu(self, data):
+        imu = data.get("IMU", data)
+        self._sensor["imu"] = (
+            float(imu.get("Pitch", 0.0)), float(imu.get("Roll", 0.0)), float(imu.get("Yaw", 0.0))
+        )
+
+    def _on_accel(self, data):
+        a = data.get("Accelerometer", data)
+        self._sensor["accel"] = (
+            float(a.get("X", 0.0)), float(a.get("Y", 0.0)), float(a.get("Z", 1.0))
+        )
+
+    # ---------- Robot interface ----------
+
+    def drive(self, speed: float, heading: float) -> None:
+        if self._active_hazard in _HALTING_HAZARDS:
+            return  # halted until cleared
+        speed_byte = int(max(0.0, min(1.0, speed)) * self._SDK_MAX_SPEED_BYTE)
+        # SDK heading is 0..359 integer, 0 = the direction it faced at reset_yaw.
+        self._rvr.drive_with_heading(
+            speed=speed_byte,
+            heading=int(heading) % 360,
+            flags=0,
+        )
+
+    def stop(self) -> None:
+        self._rvr.drive_with_heading(speed=0, heading=0, flags=0)
+
+    def apply_hazard(self, hazard_name: str) -> None:
+        self._active_hazard = hazard_name
+        if hazard_name in _HALTING_HAZARDS:
+            self.stop()
+
+    def clear_hazard(self) -> None:
+        self._active_hazard = None
+
+    def set_params(self, params: dict) -> None:
+        # No live tuning of the SDK itself yet; follower reads line_follow params.
+        # Kept for interface parity and future per-robot tuning.
+        self._params = dict(params)
+
+    def telemetry(self) -> Telemetry:
+        now = time.time()
+        r, g, b = self._sensor.get("colour", (0, 0, 0))
+        colour_name = self._classifier.classify(r, g, b)
+        lx, ly = self._sensor.get("locator", (0.0, 0.0))
+        pitch, roll, yaw = self._sensor.get("imu", (0.0, 0.0, 0.0))
+        ax, ay, az = self._sensor.get("accel", (0.0, 0.0, 1.0))
+
+        # Battery polled occasionally (the SDK call is slow); refresh ~every 30s.
+        if now - getattr(self, "_last_battery_poll", 0) > 30:
+            try:
+                self._battery_pct = float(self._rvr.get_battery_percentage().get("percentage", self._battery_pct))
+            except Exception:
+                pass
+            self._last_battery_poll = now
+
+        return Telemetry(
+            robot_id=self.robot_id,
+            ts=now,
+            collision=False,  # TODO: derive from an accel spike threshold on hardware
+            active_hazard=self._active_hazard,
+            is_malfunctioning=self._active_hazard in _HALTING_HAZARDS,
+            heat_number=self._heat_number,
+            heading=yaw % 360.0,
+            battery=self._battery_pct,
+            accel_x=ax, accel_y=ay, accel_z=az,
+            attitude_pitch=pitch, attitude_roll=roll, attitude_yaw=yaw,
+            locator_x=lx, locator_y=ly,
+            colour_r=r, colour_g=g, colour_b=b, colour_name=colour_name,
+            voltage=self._voltage_from_pct(self._battery_pct),
+        )
+
+    def _voltage_from_pct(self, pct: float) -> float:
+        return 14.5 + (16.0 - 14.5) * (pct / 100.0)
+
+    def close(self) -> None:
+        try:
+            self._rvr.sensor_control.clear()
+            self._rvr.close()
+        except Exception:
+            pass

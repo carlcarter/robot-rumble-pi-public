@@ -29,7 +29,14 @@ STREAMING_CHANNEL = "/event/Robot_Command__e"
 
 # Command verb -> what we do to the robot. Keep in step with RobotCommandPublisher
 # (Apex) VALID_COMMANDS.
-VALID_COMMANDS = {"RESUME", "HALT", "RESET_HAZARD"}
+#
+# RESUME/HALT/RESET_HAZARD act directly on the robot. The ISSUE_* verbs fire a
+# simulated colour-patch issue through the control loop (so a Case is raised exactly
+# as a physical patch would), letting us trigger each error on demand from Slack —
+# the same path as `resume edi`.
+RESUME_VERBS = {"RESUME", "RESET_HAZARD"}
+ISSUE_VERBS = {"ISSUE_RED": "red", "ISSUE_YELLOW": "yellow", "ISSUE_GREEN": "green"}
+VALID_COMMANDS = {"RESUME", "HALT", "RESET_HAZARD"} | set(ISSUE_VERBS)
 
 
 def should_handle(payload: dict, my_robot_id: str) -> bool:
@@ -44,16 +51,18 @@ def should_handle(payload: dict, my_robot_id: str) -> bool:
     return bool(event_robot) and event_robot == my_robot_id.strip().upper()
 
 
-def dispatch_command(robot: Robot, command: str) -> bool:
+def dispatch_command(robot: Robot, command: str, issue_trigger: Optional[Callable[[str], bool]] = None) -> bool:
     """
     Apply a command to the robot. Returns True if something was done.
 
     RESUME / RESET_HAZARD both clear the malfunction and let the robot drive on;
-    HALT stops it. Unknown verbs are ignored (logged), never raised — a bad event
-    must not kill the subscriber thread.
+    HALT stops it. ISSUE_RED / ISSUE_YELLOW / ISSUE_GREEN fire a simulated colour
+    issue via `issue_trigger(colour)` (the control loop's trigger_issue), raising a
+    Case just like a physical patch. Unknown verbs are ignored (logged), never
+    raised — a bad event must not kill the subscriber thread.
     """
     verb = (command or "").strip().upper()
-    if verb in ("RESUME", "RESET_HAZARD"):
+    if verb in RESUME_VERBS:
         robot.clear_hazard()
         logger.info(f"Command {verb}: cleared hazard, robot resuming")
         return True
@@ -61,16 +70,25 @@ def dispatch_command(robot: Robot, command: str) -> bool:
         robot.stop()
         logger.info("Command HALT: robot stopped")
         return True
+    if verb in ISSUE_VERBS:
+        colour = ISSUE_VERBS[verb]
+        if issue_trigger is None:
+            logger.warning(f"Command {verb}: no issue trigger wired up; ignoring")
+            return False
+        fired = issue_trigger(colour)
+        logger.info(f"Command {verb}: simulated {colour} issue {'fired' if fired else 'not fired'}")
+        return fired
     logger.warning(f"Ignoring unknown command: {command!r}")
     return False
 
 
-def handle_event(payload: dict, robot: Robot, my_robot_id: str) -> bool:
+def handle_event(payload: dict, robot: Robot, my_robot_id: str,
+                 issue_trigger: Optional[Callable[[str], bool]] = None) -> bool:
     """Filter then dispatch. Returns True if the command was applied to this robot."""
     if not should_handle(payload, my_robot_id):
         return False
     fields = payload.get("payload", payload)
-    return dispatch_command(robot, str(fields.get("Command__c", "")))
+    return dispatch_command(robot, str(fields.get("Command__c", "")), issue_trigger)
 
 
 class CommandSubscriber:
@@ -88,6 +106,7 @@ class CommandSubscriber:
         robot_id: str,
         token_provider: Callable[[], tuple],
         client_factory: Optional[Callable] = None,
+        issue_trigger: Optional[Callable[[str], bool]] = None,
     ):
         """
         Args:
@@ -95,11 +114,15 @@ class CommandSubscriber:
             robot_id: EDI / LON — only events for this robot are acted on
             token_provider: returns (access_token, instance_url) for the Streaming API
             client_factory: builds the CometD client; defaults to aiosfstream
+            issue_trigger: callback(colour)->bool that fires a simulated colour issue
+                (the control loop's trigger_issue). Lets ISSUE_* commands raise a Case
+                on demand. Optional — without it, ISSUE_* commands are ignored.
         """
         self.robot = robot
         self.robot_id = robot_id
         self.token_provider = token_provider
         self.client_factory = client_factory or self._default_client_factory
+        self.issue_trigger = issue_trigger
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
 
@@ -135,7 +158,7 @@ class CommandSubscriber:
                 for message in client.connect():
                     data = message.get("data", {}) if isinstance(message, dict) else {}
                     try:
-                        handle_event(data, self.robot, self.robot_id)
+                        handle_event(data, self.robot, self.robot_id, self.issue_trigger)
                     except Exception as e:
                         logger.error(f"Failed handling command event: {e}")
         finally:

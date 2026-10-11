@@ -77,6 +77,47 @@ def test_command_is_case_insensitive():
     assert dispatch_command(robot, " resume ") is True
 
 
+# ---------- Issue-trigger verbs (simulated colour patches from Slack) ----------
+
+
+def test_issue_verb_calls_trigger_with_colour():
+    robot = FakeRobot("EDI")
+    fired = []
+    assert dispatch_command(robot, "ISSUE_RED", issue_trigger=lambda c: fired.append(c) or True) is True
+    assert fired == ["red"]
+
+
+def test_issue_verbs_map_to_each_colour():
+    robot = FakeRobot("EDI")
+    for verb, colour in [("ISSUE_RED", "red"), ("ISSUE_YELLOW", "yellow"), ("ISSUE_GREEN", "green")]:
+        seen = []
+        dispatch_command(robot, verb, issue_trigger=lambda c: seen.append(c) or True)
+        assert seen == [colour]
+
+
+def test_issue_verb_without_trigger_is_ignored():
+    robot = FakeRobot("EDI")
+    # No issue_trigger wired → safely ignored, never raised.
+    assert dispatch_command(robot, "ISSUE_RED") is False
+
+
+def test_issue_verb_is_case_insensitive():
+    robot = FakeRobot("EDI")
+    seen = []
+    assert dispatch_command(robot, " issue_green ", issue_trigger=lambda c: seen.append(c) or True) is True
+    assert seen == ["green"]
+
+
+def test_handle_event_routes_issue_verb_for_matching_robot():
+    robot = FakeRobot("EDI")
+    seen = []
+    ev = _event("EDI", "ISSUE_YELLOW")
+    assert handle_event(ev, robot, "EDI", issue_trigger=lambda c: seen.append(c) or True) is True
+    assert seen == ["yellow"]
+    # Wrong robot: ignored.
+    assert handle_event(_event("LON", "ISSUE_RED"), robot, "EDI", issue_trigger=lambda c: seen.append(c) or True) is False
+
+
 # ---------- handle_event: filter + dispatch together ----------
 
 

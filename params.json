@@ -3,5 +3,23 @@
   "turn_rate": 1.4,
   "avoidance_radius_cm": 15,
   "sensor_smoothing": false,
-  "motor_invert": false
+  "motor_invert": false,
+  "line_follow": {
+    "line_colour": "blue",
+    "base_speed": 0.30,
+    "search_speed": 0.20,
+    "search_sweep_deg": 25.0,
+    "search_step": 3.0,
+    "patch_confirm_samples": 3,
+    "reacquire_samples": 5
+  },
+  "patch_issues": {
+    "red":    { "hazard": "red_card",    "case_type": "Robot Critical Issue", "subject": "RVR-{robot}: critical fault (red patch)" },
+    "yellow": { "hazard": "yellow_card", "case_type": "Robot Warning Issue",  "subject": "RVR-{robot}: warning fault (yellow patch)" },
+    "green":  { "hazard": "green_card",  "case_type": "Robot Minor Issue",    "subject": "RVR-{robot}: minor fault (green patch)" }
+  },
+  "simulate": {
+    "enabled": true,
+    "script": []
+  }
 }

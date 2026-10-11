@@ -58,6 +58,8 @@ class CaseManager:
         description: str,
         hazard: Optional[str] = None,
         heat_number: int = 0,
+        case_type: Optional[str] = None,
+        subject: Optional[str] = None,
     ) -> str:
         """
         Create a Case in Salesforce.
@@ -67,6 +69,10 @@ class CaseManager:
             description: what went wrong (e.g. "IMU deceleration spike; no forward progress for 3s")
             hazard: the active hazard name, if any (for the leaderboard metric "Fastest Fixers")
             heat_number: which heat this occurred in
+            case_type: the Case Type picklist value for this issue (e.g. the colour-patch
+                issue type). Omit for a generic crash/stall case.
+            subject: override the default Subject line (e.g. a per-issue subject). Omit
+                to use the default "RVR-{robot_id}: crash/stall detected".
 
         Returns:
             Case ID on success.
@@ -85,13 +91,18 @@ class CaseManager:
         path = f"/services/data/{self.API_VERSION}/sobjects/Case"
 
         body = {
-            "Subject": f"RVR-{robot_id}: crash/stall detected",
+            "Subject": subject or f"RVR-{robot_id}: crash/stall detected",
             "Description": description,
             "Origin": "Robot",
             "Priority": "High",
             "Status": "New",
             "Robot_ID__c": robot_id,
         }
+
+        # Distinct issue type → Case Type picklist, so each colour patch maps to its
+        # own case type and (next week) its own resolution path.
+        if case_type:
+            body["Type"] = case_type
 
         # Stamp the Robot record type so the case picks up the Robot Rumble layout,
         # record page and compact layout. Skipped silently if it can't be resolved.
