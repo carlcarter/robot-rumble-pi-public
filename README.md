@@ -6,7 +6,7 @@ This repo holds the Python that runs on each Raspberry Pi:
 
 - a 20 Hz control loop driving one RVR+
 - real-time telemetry into **Data Cloud** (Server-to-Server events, sub-second)
-- Service Cloud **Case** creation on every crash (feeds the Slack alert flow in the SFDX repo)
+- Service Cloud **Case** creation on every crash (feeds the Slack alert flow in the SFDX repo), stamped with the **Robot** record type so cases pick up the Robot Rumble layout and record page
 - a **command subscriber** that listens for `Robot_Command__e` platform events and resumes the robot when an operator "fixes" it from Slack (the fake-fix loop)
 - a hot-reloadable `params.json` so the robot's behaviour can be tweaked live
 
@@ -33,7 +33,7 @@ Pipe 3 subscribes to the Salesforce Streaming API (CometD/Bayeux) over plain HTT
 ├── colour.py             # Nearest-centroid RGB -> colour-name classifier
 ├── command_subscriber.py # Pipe 3: Streaming API (Bayeux) subscriber -> clear_hazard()
 ├── sf_auth.py            # OAuth client-credentials for Service Cloud + batch Data Cloud
-├── sf_service.py         # Case creation
+├── sf_service.py         # Case creation (resolves + stamps the Robot record type)
 ├── datacloud.py          # Batch Ingestion API (legacy)
 ├── s2s_auth.py           # JWT bearer auth for S2S real-time
 ├── s2s_events.py         # Non-blocking background sender for S2S events
