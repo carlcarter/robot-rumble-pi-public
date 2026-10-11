@@ -14,9 +14,43 @@ class CaseManager:
 
     API_VERSION = "v67.0"
 
+    # DeveloperName of the Case record type robot cases should use. The dashboard
+    # layout, Lightning record page and compact layout in the org are all keyed to
+    # this record type, so cases must carry it to pick those up.
+    ROBOT_RECORD_TYPE = "Robot"
+
     def __init__(self):
         self._last_case_raised_at = 0.0
         self._min_case_interval = 5.0  # Debounce: at most one case per 5s.
+        self._robot_record_type_id: Optional[str] = None  # resolved lazily, then cached
+
+    def _get_robot_record_type_id(self) -> Optional[str]:
+        """
+        Resolve the Robot Case record type Id by DeveloperName and cache it.
+
+        Queried (never hardcoded) so the same code works across orgs. Returns None
+        if the record type isn't found, in which case the case is created without
+        one rather than failing — the org default applies and we don't block the demo.
+        """
+        if self._robot_record_type_id is not None:
+            return self._robot_record_type_id
+
+        auth = get_auth()
+        query = (
+            "SELECT Id FROM RecordType "
+            "WHERE SobjectType = 'Case' "
+            f"AND DeveloperName = '{self.ROBOT_RECORD_TYPE}' LIMIT 1"
+        )
+        path = f"/services/data/{self.API_VERSION}/query?q={query}"
+        try:
+            resp = auth.call_salesforce_api("GET", path)
+            records = resp.json().get("records", [])
+            if records:
+                self._robot_record_type_id = records[0]["Id"]
+        except Exception:
+            # Don't let record-type resolution take down case creation on the day.
+            self._robot_record_type_id = None
+        return self._robot_record_type_id
 
     def create_case(
         self,
@@ -58,6 +92,12 @@ class CaseManager:
             "Status": "New",
             "Robot_ID__c": robot_id,
         }
+
+        # Stamp the Robot record type so the case picks up the Robot Rumble layout,
+        # record page and compact layout. Skipped silently if it can't be resolved.
+        record_type_id = self._get_robot_record_type_id()
+        if record_type_id:
+            body["RecordTypeId"] = record_type_id
 
         # Optional custom fields for metrics (adjust field names to your org).
         # These would be part of the "Fastest Fixers" leaderboard calculation.
