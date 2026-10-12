@@ -416,9 +416,39 @@ def main():
         s2s_enabled=s2s_enabled,
     )
 
+    # Camera uploader (Pi Camera 3 → Heroku host → dashboard). Off by default; a
+    # Pi-only feature. Its set_enabled is handed to the command subscriber so the
+    # Slack CAMERA_OFF/CAMERA_ON kill-switch can stop/start uploads remotely.
+    camera = None
+    cam_enabled_env = os.getenv("CAMERA_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+    cam_fake = os.getenv("CAMERA_FAKE", "false").strip().lower() in ("1", "true", "yes")
+    cam_url = os.getenv("CAMERA_UPLOAD_URL", "").strip()
+    cam_token = os.getenv("CAMERA_UPLOAD_TOKEN", "").strip()
+    if (cam_enabled_env or cam_fake) and cam_url and cam_token:
+        try:
+            from camera_uploader import CameraUploader
+
+            res = os.getenv("CAMERA_RESOLUTION", "640x480").lower().split("x")
+            resolution = (int(res[0]), int(res[1])) if len(res) == 2 else (640, 480)
+            camera = CameraUploader(
+                robot_id=robot_id,
+                upload_url=cam_url,
+                upload_token=cam_token,
+                interval_s=float(os.getenv("CAMERA_INTERVAL_S", "3")),
+                resolution=resolution,
+                enabled=cam_enabled_env,
+                fake=cam_fake,
+            )
+            camera.start()
+        except Exception as e:
+            logger.error(f"Could not start camera uploader: {e}")
+    elif cam_enabled_env or cam_fake:
+        logger.warning("CAMERA_ENABLED/CAMERA_FAKE set but CAMERA_UPLOAD_URL/TOKEN missing; camera off.")
+
     # Command subscriber: listen for Robot_Command__e (the /fix loop) and act on it —
-    # RESUME clears the hazard; ISSUE_RED/YELLOW/GREEN fire a simulated issue. Needs SF
-    # auth; on by default when auth is configured, disable with COMMAND_SUBSCRIBER_ENABLED=false.
+    # RESUME clears the hazard; ISSUE_RED/YELLOW/GREEN fire a simulated issue;
+    # CAMERA_OFF/CAMERA_ON toggle camera uploads. Needs SF auth; on by default when
+    # auth is configured, disable with COMMAND_SUBSCRIBER_ENABLED=false.
     subscriber = None
     cmd_sub_enabled = os.getenv("COMMAND_SUBSCRIBER_ENABLED", "true").strip().lower() in ("1", "true", "yes")
     if cmd_sub_enabled and _auth_is_configured(sf_domain, sf_client_id, sf_client_secret, placeholder_values):
@@ -437,6 +467,7 @@ def main():
                 robot_id=robot_id,
                 token_provider=token_provider,
                 issue_trigger=loop.trigger_issue,
+                camera_toggle=(camera.set_enabled if camera else None),
             )
             subscriber.start()
         except Exception as e:
@@ -447,7 +478,11 @@ def main():
     # MAX_ITERATIONS=0 runs until Ctrl+C — needed to watch the robot drive a full
     # lap and hit hazards.
     max_iterations = int(os.getenv("MAX_ITERATIONS", "100")) or None
-    loop.run(max_iterations=max_iterations)
+    try:
+        loop.run(max_iterations=max_iterations)
+    finally:
+        if camera:
+            camera.stop()
 
 
 if __name__ == "__main__":

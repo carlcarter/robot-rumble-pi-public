@@ -108,6 +108,36 @@ def test_issue_verb_is_case_insensitive():
     assert seen == ["green"]
 
 
+def test_camera_off_on_toggle_callback():
+    robot = FakeRobot("EDI")
+    states = []
+    assert dispatch_command(robot, "CAMERA_OFF", camera_toggle=lambda v: states.append(v)) is True
+    assert dispatch_command(robot, "CAMERA_ON", camera_toggle=lambda v: states.append(v)) is True
+    assert states == [False, True]
+
+
+def test_camera_verb_without_toggle_is_ignored():
+    robot = FakeRobot("EDI")
+    assert dispatch_command(robot, "CAMERA_OFF") is False
+
+
+def test_camera_verb_case_insensitive():
+    robot = FakeRobot("EDI")
+    states = []
+    assert dispatch_command(robot, " camera_off ", camera_toggle=lambda v: states.append(v)) is True
+    assert states == [False]
+
+
+def test_handle_event_routes_camera_verb_for_matching_robot():
+    robot = FakeRobot("EDI")
+    states = []
+    ev = _event("EDI", "CAMERA_OFF")
+    assert handle_event(ev, robot, "EDI", camera_toggle=lambda v: states.append(v)) is True
+    assert states == [False]
+    # Wrong robot: ignored.
+    assert handle_event(_event("LON", "CAMERA_ON"), robot, "EDI", camera_toggle=lambda v: states.append(v)) is False
+
+
 def test_handle_event_routes_issue_verb_for_matching_robot():
     robot = FakeRobot("EDI")
     seen = []
