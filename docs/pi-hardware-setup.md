@@ -347,9 +347,84 @@ Configure an **access-point fallback** so that if the Pi can't join any saved ne
 
 Document your fallback AP's SSID/password and keep it with the kit. This is the "worst case, 400 miles away, nothing else works" safety net.
 
-### Auto-start on boot
+### Auto-start on boot (systemd)
 
-So a power-cycle fully recovers the robot unattended, run the control loop (and camera, if used) as a **systemd service** rather than a manual `python control_loop.py`. Create a unit that `ExecStart`s the venv Python against `control_loop.py` with `Restart=always`, enable it (`sudo systemctl enable --now robot-rumble`), and confirm a reboot brings everything back with no keyboard.
+On the day you want this: **pull the power → the Pi reboots → the control loop (and camera) come back on their own**, with no keyboard or screen. That's a rudimentary but reliable "reset the device" fix if a robot misbehaves at either venue.
+
+We do this with a **systemd service**. Important: the auto-start is controlled by whether the service is *enabled*, **not** by a flag in `.env` — systemd starts the loop before Python ever reads `.env`, so an in-app flag can't gate boot. The on/off switch is `systemctl enable` / `disable` (below). Enable it for the event; leave it disabled while you're testing so it doesn't relaunch every time you reboot.
+
+**1. Create the service file** (`sudo nano /etc/systemd/system/robot-rumble.service`):
+
+```ini
+[Unit]
+Description=Robot Rumble control loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=carl-edi
+WorkingDirectory=/home/carl-edi/robot-rumble-code
+# Run the venv Python directly (no need to "activate"); MAX_ITERATIONS=0 = run forever.
+ExecStart=/home/carl-edi/rvr/bin/python /home/carl-edi/robot-rumble-code/control_loop.py
+Restart=always
+RestartSec=5
+# So you can read the output with journalctl:
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Adjust `User`, `WorkingDirectory`, and the venv path (`~/rvr/bin/python`) to match your Pi. Set `MAX_ITERATIONS=0` in `.env` so the loop runs until stopped. (`EnvironmentFile=` isn't needed — the app loads `.env` itself from its working directory.)
+
+**2. Register it after creating or editing the file:**
+
+```bash
+sudo systemctl daemon-reload
+```
+
+### Turn auto-start ON (do this for the event)
+
+```bash
+sudo systemctl enable --now robot-rumble     # start now AND on every boot
+systemctl status robot-rumble                # confirm it's "active (running)"
+```
+
+From now on, a power-pull/reboot relaunches everything automatically. `Restart=always` also means if the loop crashes, systemd restarts it within 5 s.
+
+### Turn auto-start OFF (do this while testing)
+
+```bash
+sudo systemctl disable --now robot-rumble    # stop now AND don't start on boot
+```
+
+Now reboots won't launch the loop, and you run it by hand as usual (`source ~/rvr/bin/activate && MAX_ITERATIONS=0 python control_loop.py`). Flip between the two states freely — `enable` for a rehearsal/the day, `disable` when you're iterating.
+
+### Everyday commands
+
+```bash
+sudo systemctl start robot-rumble     # start it now (without changing boot behaviour)
+sudo systemctl stop robot-rumble      # stop it now
+sudo systemctl restart robot-rumble   # restart (needed after an .env change — see below)
+journalctl -u robot-rumble -f         # tail the live logs (like watching the console)
+journalctl -u robot-rumble -n 100     # last 100 log lines
+```
+
+### ⚠️ `.env` is NOT hot-reloaded
+
+The app reads `.env` **once at startup**. If you SSH in on the day and change anything in `.env` (credentials, `ROBOT_ID`, the camera URL, `CAMERA_ENABLED`, etc.), you must **restart the service** for it to take effect:
+
+```bash
+sudo systemctl restart robot-rumble
+```
+
+What you *can* change live without a restart:
+- **`params.json`** — hot-reloaded by the running loop (line-follow speed, patch confirm samples, patch→issue mapping). Edit and save; it applies within a tick.
+- **Slack commands** — `resume`, `issue red/yellow/green`, `camera off/on`, `halt` all act live over the command bus.
+
+So on the day, reach for `params.json` and Slack for live changes; only touch `.env` (and restart) for the set-once things.
 
 ---
 
