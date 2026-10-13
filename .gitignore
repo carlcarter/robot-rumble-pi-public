@@ -39,3 +39,6 @@ Thumbs.db
 # Backups
 *.bak
 *.orig
+
+# Large vendor manual — kept local, not committed (10MB binary)
+docs/rvrGuide.pdf

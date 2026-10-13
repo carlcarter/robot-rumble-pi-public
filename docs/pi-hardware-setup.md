@@ -303,6 +303,96 @@ robot = SpheroRobot(robot_id=robot_id)  # or auto-detect based on env var
 
 ---
 
+## Step 11: Headless networking (do this at your desk, before the event)
+
+The Pi has no screen at the venue, so it must auto-join a known network on boot, and you need a guaranteed way to reach it. Pi OS Bookworm/Trixie use **NetworkManager**. Pre-seed every network you might use, with priorities, over SSH before you travel.
+
+### Pre-seed known networks (highest priority wins)
+
+Add each network; higher `autoconnect-priority` is preferred when more than one is in range:
+
+```bash
+# Venue MiFi (intended primary — highest priority)
+sudo nmcli connection add type wifi con-name mifi ssid "<MIFI_SSID>"
+sudo nmcli connection modify mifi wifi-sec.key-mgmt wpa-psk wifi-sec.psk "<MIFI_PASSWORD>"
+sudo nmcli connection modify mifi connection.autoconnect yes connection.autoconnect-priority 20
+
+# Your phone hotspot (fallback)
+sudo nmcli connection add type wifi con-name phone ssid "<PHONE_HOTSPOT_SSID>"
+sudo nmcli connection modify phone wifi-sec.key-mgmt wpa-psk wifi-sec.psk "<PHONE_PASSWORD>"
+sudo nmcli connection modify phone connection.autoconnect yes connection.autoconnect-priority 10
+
+# Home/office wifi (so it reconnects at base) — priority 5, etc.
+```
+
+The Pi joins the highest-priority known network in range automatically on boot — no screen needed.
+
+### Phone-hotspot gotchas (these bite on the day)
+
+- **Fix the SSID + password in advance** and type them in now. On iPhone the hotspot name follows the device name (Settings → General → About → Name); you can't change it at the venue without re-seeding the Pi.
+- **Force 2.4GHz:** iPhone → Personal Hotspot → turn **"Maximize Compatibility" ON**. The Pi 4's wifi is far more reliable on 2.4GHz (matches the 2.4GHz note in Step 1).
+- **The hotspot must be broadcasting before the Pi looks for it.** iPhone hotspots can be lazy about advertising — keep the Personal Hotspot screen open while the Pi boots, or power-cycle the Pi once the hotspot is clearly up.
+
+### Reaching the Pi from your phone
+
+- **Over the shared network:** when the Pi and your phone are on the same MiFi/hotspot, SSH from a phone SSH app (Termius / Blink) to `rvr-edi.local` (or `rvr-lon.local`), or the IP the hotspot's connected-devices list shows. When the Pi is *on your hotspot*, your phone is the router, so the Pi appears in that list.
+- **"Am I online?" with no screen:** the planned RGB status-LED feature flashes green once the Pi has network + Salesforce auth — a headless health check (see the project TODO). Until that lands, SSH in to confirm.
+
+### Last-resort: Pi as its own hotspot (fix things when no known network is around)
+
+Configure an **access-point fallback** so that if the Pi can't join any saved network, it raises *its own* wifi AP; you connect your phone directly to the Pi and SSH in to fix it. Options:
+
+- A tool like **`comitup`** or **`AutoHotspot`** (switches to AP mode when no known SSID is found), or
+- A manually-defined low-priority NetworkManager AP connection as a last resort.
+
+Document your fallback AP's SSID/password and keep it with the kit. This is the "worst case, 400 miles away, nothing else works" safety net.
+
+### Auto-start on boot
+
+So a power-cycle fully recovers the robot unattended, run the control loop (and camera, if used) as a **systemd service** rather than a manual `python control_loop.py`. Create a unit that `ExecStart`s the venv Python against `control_loop.py` with `Restart=always`, enable it (`sudo systemctl enable --now robot-rumble`), and confirm a reboot brings everything back with no keyboard.
+
+---
+
+## Step 12: Pi Camera 3 (optional — robot's-eye view on the dashboard)
+
+A Pi Camera 3 on the **front of the RVR+** can stream a still photo every few seconds to the Salesforce dashboard. Entirely optional and off by default.
+
+### Fit the camera
+
+- Connect the Pi Camera 3 to the Pi 4's **CSI camera port** (the ribbon connector between the HDMI ports and the 3.5mm jack — *not* the similar-looking display port). Blue side of the ribbon faces the Ethernet/USB ports.
+- Mount it on the front of the RVR+ so the ribbon reaches without fouling the drive or the UART lead. Route and secure the ribbon.
+
+### Install the camera stack (apt, not pip)
+
+```bash
+sudo apt update && sudo apt install -y python3-picamera2
+# picamera2 + libcamera are provided as system packages on Pi OS Bookworm.
+# Quick check:
+libcamera-hello --timeout 2000   # should briefly show/confirm the camera
+```
+
+(`picamera2` is deliberately **not** in `requirements.txt` — it's a Pi-only system package, same convention as the Sphero SDK and pyserial.)
+
+### Configure + run
+
+Set the camera env vars in `.env` (see `.env.example` `CAMERA_*`):
+
+```
+CAMERA_ENABLED=true
+CAMERA_UPLOAD_URL=https://<your-camera-host>.herokuapp.com
+CAMERA_UPLOAD_TOKEN=<must match the host's token>
+CAMERA_INTERVAL_S=3
+CAMERA_RESOLUTION=640x480
+```
+
+The control loop starts the camera uploader automatically when `CAMERA_ENABLED=true` and the URL + token are set. The image host is the separate **`robot-rumble-camera-host`** repo (deployed to Heroku); the dashboard's **Camera host base URL** component setting must point at the same app.
+
+**Remote kill-switch:** if the camera's uploads eat too much venue bandwidth, type `camera off edi` (or `lon`) in the robot's Slack channel to stop uploads without touching the Pi; `camera on edi` resumes. (See the Slack command cheat sheet in the `robot-rumble-sf` repo.)
+
+**Test with no camera:** on a Mac/dev box set `CAMERA_FAKE=true` (plus URL + token) to upload a static test frame and exercise the host → dashboard path without hardware.
+
+---
+
 ## Common Gotchas
 
 **Serial connection fails ("timeout", no response from RVR):**

@@ -79,21 +79,27 @@ def test_imu_accel_correlates_with_velocity_change():
     assert max(accels) > 0.05  # not just noise
 
 
-# ---------- Scripted hazards + fake fix ----------
+# ---------- Scripted colour-patch course + fake fix ----------
 
 
-def test_scripted_hazard_fires_once_per_lap_and_sets_malfunctioning():
+def test_course_has_coloured_patches_on_its_route():
+    """
+    FakeRobot no longer fires hazards itself — it drives a course where the colour
+    sensor reads a coloured-paper patch at scripted points. The control loop's line
+    follower is what turns a patch into an issue. Here we only assert the robot
+    actually encounters the patch colours as it drives.
+    """
     robot = FakeRobot(robot_id="TEST", seed=1)
     robot.drive(0.5, 0.0)
-    saw_hazard = False
+    seen = set()
     for _ in range(600):
         robot._last_tick_ts -= 0.1
         t = robot.telemetry()
-        if t.active_hazard in {"red_card", "yellow_card", "green_card"}:
-            saw_hazard = True
-            assert t.is_malfunctioning is True
-            break
-    assert saw_hazard, "FakeRobot should hit a scripted hazard inside one lap"
+        seen.add(t.colour_name)
+        # The robot never halts itself now: no active hazard appears unprompted.
+        assert t.active_hazard is None
+    assert "blue" in seen, "should mostly see the blue line"
+    assert seen & {"red", "yellow", "green"}, "should roll over coloured patches"
 
 
 def test_clear_hazard_resumes_the_robot():

@@ -14,9 +14,43 @@ class CaseManager:
 
     API_VERSION = "v67.0"
 
+    # DeveloperName of the Case record type robot cases should use. The dashboard
+    # layout, Lightning record page and compact layout in the org are all keyed to
+    # this record type, so cases must carry it to pick those up.
+    ROBOT_RECORD_TYPE = "Robot"
+
     def __init__(self):
         self._last_case_raised_at = 0.0
         self._min_case_interval = 5.0  # Debounce: at most one case per 5s.
+        self._robot_record_type_id: Optional[str] = None  # resolved lazily, then cached
+
+    def _get_robot_record_type_id(self) -> Optional[str]:
+        """
+        Resolve the Robot Case record type Id by DeveloperName and cache it.
+
+        Queried (never hardcoded) so the same code works across orgs. Returns None
+        if the record type isn't found, in which case the case is created without
+        one rather than failing — the org default applies and we don't block the demo.
+        """
+        if self._robot_record_type_id is not None:
+            return self._robot_record_type_id
+
+        auth = get_auth()
+        query = (
+            "SELECT Id FROM RecordType "
+            "WHERE SobjectType = 'Case' "
+            f"AND DeveloperName = '{self.ROBOT_RECORD_TYPE}' LIMIT 1"
+        )
+        path = f"/services/data/{self.API_VERSION}/query?q={query}"
+        try:
+            resp = auth.call_salesforce_api("GET", path)
+            records = resp.json().get("records", [])
+            if records:
+                self._robot_record_type_id = records[0]["Id"]
+        except Exception:
+            # Don't let record-type resolution take down case creation on the day.
+            self._robot_record_type_id = None
+        return self._robot_record_type_id
 
     def create_case(
         self,
@@ -24,6 +58,8 @@ class CaseManager:
         description: str,
         hazard: Optional[str] = None,
         heat_number: int = 0,
+        case_type: Optional[str] = None,
+        subject: Optional[str] = None,
     ) -> str:
         """
         Create a Case in Salesforce.
@@ -33,6 +69,10 @@ class CaseManager:
             description: what went wrong (e.g. "IMU deceleration spike; no forward progress for 3s")
             hazard: the active hazard name, if any (for the leaderboard metric "Fastest Fixers")
             heat_number: which heat this occurred in
+            case_type: the Case Type picklist value for this issue (e.g. the colour-patch
+                issue type). Omit for a generic crash/stall case.
+            subject: override the default Subject line (e.g. a per-issue subject). Omit
+                to use the default "RVR-{robot_id}: crash/stall detected".
 
         Returns:
             Case ID on success.
@@ -51,13 +91,24 @@ class CaseManager:
         path = f"/services/data/{self.API_VERSION}/sobjects/Case"
 
         body = {
-            "Subject": f"RVR-{robot_id}: crash/stall detected",
+            "Subject": subject or f"RVR-{robot_id}: crash/stall detected",
             "Description": description,
             "Origin": "Robot",
             "Priority": "High",
             "Status": "New",
             "Robot_ID__c": robot_id,
         }
+
+        # Distinct issue type → Case Type picklist, so each colour patch maps to its
+        # own case type and (next week) its own resolution path.
+        if case_type:
+            body["Type"] = case_type
+
+        # Stamp the Robot record type so the case picks up the Robot Rumble layout,
+        # record page and compact layout. Skipped silently if it can't be resolved.
+        record_type_id = self._get_robot_record_type_id()
+        if record_type_id:
+            body["RecordTypeId"] = record_type_id
 
         # Optional custom fields for metrics (adjust field names to your org).
         # These would be part of the "Fastest Fixers" leaderboard calculation.

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from robot import Robot, FakeRobot
+from line_follower import LineFollower
 from sf_auth import init_auth, get_auth
 from sf_service import init_cases, get_case_manager
 from datacloud import init_datacloud, get_ingestor
@@ -75,6 +76,20 @@ class ControlLoop:
         self._last_datacloud_send = 0.0
         self._last_telemetry = None
 
+        # Line follower owns driving + colour-patch issue detection + the post-resume
+        # re-arm. Prime it from params.json now so patch detection works from tick 1;
+        # it's refreshed on every hot-reload too.
+        self._follower = LineFollower()
+        initial = self.load_params()
+        if initial:
+            self._follower.update_config(
+                config=initial.get("line_follow"),
+                patch_issues=initial.get("patch_issues"),
+            )
+        # Track the robot's halt state so we can detect a resume (set→clear) and tell
+        # the follower to re-acquire the line before another patch can fire.
+        self._was_malfunctioning = False
+
     def load_params(self) -> dict:
         """Load params.json. Handles missing file gracefully."""
         if not self.params_file.exists():
@@ -123,19 +138,30 @@ class ControlLoop:
     def _tick(self, iteration: int) -> None:
         """Single iteration of the control loop."""
 
-        # 0. Drive. Until the line-follower (line_follower.py) is wired in, issue a
-        #    steady cruise so the robot actually moves — otherwise FakeRobot's
-        #    scripted route never advances and every telemetry sample reads zero.
-        #    A malfunctioning robot holds position until the hazard is cleared.
+        # 0. Drive. A malfunctioning robot holds position until the hazard is
+        #    cleared from Slack; otherwise the line follower decides steering from
+        #    the last colour reading (stay on the line, or sweep to re-acquire it).
         last = getattr(self, "_last_telemetry", None)
         if last is not None and last.is_malfunctioning:
             self.robot.stop()
+        elif last is not None:
+            speed, heading_offset = self._follower.compute_drive(last)
+            self.robot.drive(speed, (last.heading + heading_offset) % 360.0)
         else:
+            # First tick, no telemetry yet — nudge forward so the robot starts moving.
             self.robot.drive(self.cruise_speed, 0.0)
 
         # 1. Read telemetry
         telemetry = self.robot.telemetry()
         self._last_telemetry = telemetry
+
+        # 1a. Detect a resume: hazard was set last tick, now cleared (e.g. the Slack
+        #     `resume` command called clear_hazard()). Tell the follower to re-acquire
+        #     the line before any new patch can fire, so it can't re-trigger on the
+        #     patch it was resumed over.
+        if self._was_malfunctioning and not telemetry.is_malfunctioning:
+            self._follower.on_resume()
+        self._was_malfunctioning = telemetry.is_malfunctioning
 
         # Log telemetry every 20 iterations (once/sec at 20 Hz) for visibility
         if iteration % 20 == 0:
@@ -163,7 +189,15 @@ class ControlLoop:
                 except Exception as e:
                     logger.error(f"S2S post failed: {e}")
 
-        # 3. Detect crash/stall (debounced: only once every 5 seconds after detection).
+        # 3. Detect a colour-patch issue: the follower confirms a patch colour over
+        #    several ticks, then we halt the robot and raise the matching Case Type.
+        issue = self._follower.detect_issue(telemetry)
+        if issue:
+            logger.warning(f"Colour-patch issue detected: {issue['colour']} → {issue.get('case_type')}")
+            self.robot.apply_hazard(issue["hazard"])
+            self._handle_issue(telemetry, issue)
+
+        # 3b. Detect crash/stall (debounced: only once every 5 seconds after detection).
         if telemetry.collision and time.time() > self._collision_cooldown_until:
             logger.warning(f"Collision detected: {telemetry}")
             self._handle_crash(telemetry)
@@ -177,12 +211,17 @@ class ControlLoop:
                 if params:
                     logger.info(f"Reloading params.json")
                     self.robot.set_params(params)
+                    # Push line-follow + patch config into the follower too.
+                    self._follower.update_config(
+                        config=params.get("line_follow"),
+                        patch_issues=params.get("patch_issues"),
+                    )
                     self._last_params_mtime = mtime
         except FileNotFoundError:
             pass
 
     def _handle_crash(self, telemetry) -> None:
-        """Raise a Case in Service Cloud when the robot crashes."""
+        """Raise a generic Case in Service Cloud when the robot physically crashes."""
         try:
             case_mgr = get_case_manager()
             description = (
@@ -198,6 +237,59 @@ class ControlLoop:
             logger.info(f"Created Case {case_id}")
         except Exception as e:
             logger.error(f"Failed to create Case: {e}")
+
+    def _handle_issue(self, telemetry, issue) -> None:
+        """
+        Raise a Case for a colour-patch issue, with its own Case Type and subject.
+
+        `issue` is the dict the line follower returned from the patch_issues config:
+        {"colour", "hazard", "case_type", "subject"}. The subject may contain a
+        "{robot}" placeholder.
+        """
+        try:
+            case_mgr = get_case_manager()
+            subject = issue.get("subject")
+            if subject:
+                subject = subject.replace("{robot}", self.robot_id)
+            description = (
+                f"{issue['colour']} patch detected on course for {self.robot_id} "
+                f"at heading {telemetry.heading:.1f}°, battery {telemetry.battery:.1f}%"
+            )
+            case_id = case_mgr.create_case(
+                robot_id=self.robot_id,
+                description=description,
+                hazard=issue.get("hazard"),
+                heat_number=telemetry.heat_number,
+                case_type=issue.get("case_type"),
+                subject=subject,
+            )
+            logger.info(f"Created {issue.get('case_type')} Case {case_id}")
+        except Exception as e:
+            logger.error(f"Failed to create issue Case: {e}")
+
+    def trigger_issue(self, colour: str) -> bool:
+        """
+        Fire a colour-patch issue on demand — the simulated safety-net trigger.
+
+        Routes through exactly the same path as a physically-detected patch
+        (apply_hazard + raise the Case Type), so simulated and real issues are
+        indistinguishable downstream. Returns True if the colour maps to a
+        configured issue and one was raised, False otherwise. Safe to call any
+        time (e.g. bound to a key, or from a tiny local control); does nothing if
+        the robot is already halted.
+
+        This is the reliable fallback for the day: it needs no code change to
+        invoke, so the demo never depends on physical colour detection working.
+        """
+        issue = self._follower.trigger(colour)
+        if not issue:
+            logger.warning(f"trigger_issue: no configured issue for colour '{colour}'")
+            return False
+        telemetry = self._last_telemetry or self.robot.telemetry()
+        logger.warning(f"SIMULATED issue: {colour} → {issue.get('case_type')}")
+        self.robot.apply_hazard(issue["hazard"])
+        self._handle_issue(telemetry, issue)
+        return True
 
     def stop(self) -> None:
         """Stop the control loop and robot."""
@@ -313,9 +405,50 @@ def main():
     # Params file
     params_file = Path(__file__).parent / "params.json"
 
-    # Command subscriber: listen for Robot_Command__e (the /fix loop) and clear the
-    # robot's hazard when told to. Needs SF auth; on by default when auth is configured,
-    # disable with COMMAND_SUBSCRIBER_ENABLED=false.
+    # Create the loop first so the command subscriber can route ISSUE_* commands
+    # through loop.trigger_issue (fires a simulated colour issue → raises a Case).
+    loop = ControlLoop(
+        robot=robot,
+        robot_id=robot_id,
+        params_file=params_file,
+        datacloud_enabled=dc_enabled,
+        datacloud_send_interval_ms=dc_send_interval_ms,
+        s2s_enabled=s2s_enabled,
+    )
+
+    # Camera uploader (Pi Camera 3 → Heroku host → dashboard). Off by default; a
+    # Pi-only feature. Its set_enabled is handed to the command subscriber so the
+    # Slack CAMERA_OFF/CAMERA_ON kill-switch can stop/start uploads remotely.
+    camera = None
+    cam_enabled_env = os.getenv("CAMERA_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+    cam_fake = os.getenv("CAMERA_FAKE", "false").strip().lower() in ("1", "true", "yes")
+    cam_url = os.getenv("CAMERA_UPLOAD_URL", "").strip()
+    cam_token = os.getenv("CAMERA_UPLOAD_TOKEN", "").strip()
+    if (cam_enabled_env or cam_fake) and cam_url and cam_token:
+        try:
+            from camera_uploader import CameraUploader
+
+            res = os.getenv("CAMERA_RESOLUTION", "640x480").lower().split("x")
+            resolution = (int(res[0]), int(res[1])) if len(res) == 2 else (640, 480)
+            camera = CameraUploader(
+                robot_id=robot_id,
+                upload_url=cam_url,
+                upload_token=cam_token,
+                interval_s=float(os.getenv("CAMERA_INTERVAL_S", "3")),
+                resolution=resolution,
+                enabled=cam_enabled_env,
+                fake=cam_fake,
+            )
+            camera.start()
+        except Exception as e:
+            logger.error(f"Could not start camera uploader: {e}")
+    elif cam_enabled_env or cam_fake:
+        logger.warning("CAMERA_ENABLED/CAMERA_FAKE set but CAMERA_UPLOAD_URL/TOKEN missing; camera off.")
+
+    # Command subscriber: listen for Robot_Command__e (the /fix loop) and act on it —
+    # RESUME clears the hazard; ISSUE_RED/YELLOW/GREEN fire a simulated issue;
+    # CAMERA_OFF/CAMERA_ON toggle camera uploads. Needs SF auth; on by default when
+    # auth is configured, disable with COMMAND_SUBSCRIBER_ENABLED=false.
     subscriber = None
     cmd_sub_enabled = os.getenv("COMMAND_SUBSCRIBER_ENABLED", "true").strip().lower() in ("1", "true", "yes")
     if cmd_sub_enabled and _auth_is_configured(sf_domain, sf_client_id, sf_client_secret, placeholder_values):
@@ -329,27 +462,27 @@ def main():
                     f"https://{sf_domain}.my.salesforce.com",
                 )
 
-            subscriber = CommandSubscriber(robot=robot, robot_id=robot_id, token_provider=token_provider)
+            subscriber = CommandSubscriber(
+                robot=robot,
+                robot_id=robot_id,
+                token_provider=token_provider,
+                issue_trigger=loop.trigger_issue,
+                camera_toggle=(camera.set_enabled if camera else None),
+            )
             subscriber.start()
         except Exception as e:
             logger.error(f"Could not start command subscriber: {e}")
-
-    # Create and run the loop
-    loop = ControlLoop(
-        robot=robot,
-        robot_id=robot_id,
-        params_file=params_file,
-        datacloud_enabled=dc_enabled,
-        datacloud_send_interval_ms=dc_send_interval_ms,
-        s2s_enabled=s2s_enabled,
-    )
 
     # MAX_ITERATIONS controls run length: a positive number stops after that many
     # ticks (default 100 = ~5 s at 20 Hz, handy for a quick Mac smoke test), while
     # MAX_ITERATIONS=0 runs until Ctrl+C — needed to watch the robot drive a full
     # lap and hit hazards.
     max_iterations = int(os.getenv("MAX_ITERATIONS", "100")) or None
-    loop.run(max_iterations=max_iterations)
+    try:
+        loop.run(max_iterations=max_iterations)
+    finally:
+        if camera:
+            camera.stop()
 
 
 if __name__ == "__main__":
