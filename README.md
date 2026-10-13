@@ -5,10 +5,12 @@ The robot's brain for the **Robot Rumble** demo: a pair of Sphero RVR+ robots (*
 This repo holds the Python that runs on each Raspberry Pi:
 
 - a 20 Hz control loop driving one RVR+
+- **line-following** on blue tape with a single colour sensor (stay-on-line + lost-line search), with **coloured-paper patches** that raise distinct issues (red/yellow/green → Critical/Warning/Minor), and a re-arm so it rediscovers the line after a fix before firing again
 - real-time telemetry into **Data Cloud** (Server-to-Server events, sub-second)
-- Service Cloud **Case** creation on every crash (feeds the Slack alert flow in the SFDX repo), stamped with the **Robot** record type so cases pick up the Robot Rumble layout and record page
-- a **command subscriber** that listens for `Robot_Command__e` platform events and resumes the robot when an operator "fixes" it from Slack (the fake-fix loop)
-- a hot-reloadable `params.json` so the robot's behaviour can be tweaked live
+- Service Cloud **Case** creation per issue (feeds the Slack alert flow in the SFDX repo), stamped with the **Robot** record type + Case Type, so cases pick up the Robot Rumble layout and record page
+- a **command subscriber** that listens for `Robot_Command__e` platform events: `resume` to clear a fault, `issue red/yellow/green` to fire an issue on demand (the safety-net trigger), and `camera off/on` to toggle the camera feed
+- an optional **camera uploader** — Pi Camera 3 stills to the `robot-rumble-camera-host` app, shown on the dashboard
+- a hot-reloadable `params.json` so the robot's behaviour (line-follow gains, patch mapping) can be tweaked live
 
 The Salesforce side (LWC dashboard, Flows, metadata) lives in the sibling SFDX project at `../robot-rumble-sf`.
 
@@ -18,7 +20,7 @@ The Salesforce side (LWC dashboard, Flows, metadata) lives in the sibling SFDX p
 | --- | --- | --- | --- | --- |
 | **1 — Telemetry** | robot → SF | 20 Hz samples (motion, IMU, locator, colour, power) | Data Cloud `RobotLiveExtended_DG` → Lightning dashboard | Live scoreboard the audience watches |
 | **2 — Crashes** | robot → SF | One Case per collision, debounced to 5 s | Service Cloud Case → Flow → Slack `#rvr-edi` / `#rvr-lon` | Operator alert; drives the "fix the robot" moment |
-| **3 — Fix** | SF → robot | `Robot_Command__e` on `resume edi` / `resume lon` in Slack | Streaming API → Pi subscriber → `robot.clear_hazard()` | Closes the loop — the robot carries on after being "fixed" |
+| **3 — Fix / command** | SF → robot | `Robot_Command__e` from Slack: `resume`, `issue red/yellow/green`, `camera off/on` | Streaming API → Pi subscriber → `clear_hazard()` / trigger issue / toggle camera | Closes the loop — robot carries on after being "fixed"; also the on-demand issue + camera kill-switch |
 
 Pipe 1 uses the Server-to-Server (S2S) events endpoint for sub-second latency. The older batch Ingestion API path is still in the code (`DATACLOUD_MODE=batch`) but adds roughly three minutes of lag and isn't used in the live demo.
 
@@ -28,10 +30,12 @@ Pipe 3 subscribes to the Salesforce Streaming API (CometD/Bayeux) over plain HTT
 
 ```
 .
-├── control_loop.py       # Main 20 Hz loop; starts the command subscriber
-├── robot.py              # Robot interface + representative FakeRobot (SpheroRobot TODO on Pi)
+├── control_loop.py       # Main 20 Hz loop; starts the subscriber + camera uploader
+├── robot.py              # Robot interface + FakeRobot + SpheroRobot (untested until hardware)
+├── line_follower.py      # Pure follow + colour-patch issue state machine (no hardware)
 ├── colour.py             # Nearest-centroid RGB -> colour-name classifier
-├── command_subscriber.py # Pipe 3: Streaming API (Bayeux) subscriber -> clear_hazard()
+├── camera_uploader.py    # Pi Camera 3 capture -> POST to the camera-host app (daemon)
+├── command_subscriber.py # Pipe 3: Streaming API (Bayeux) subscriber -> clear_hazard() / issue / camera
 ├── sf_auth.py            # OAuth client-credentials for Service Cloud + batch Data Cloud
 ├── sf_service.py         # Case creation (resolves + stamps the Robot record type)
 ├── datacloud.py          # Batch Ingestion API (legacy)
@@ -126,11 +130,12 @@ No live org is needed. Everything that would make a network call is monkey-patch
 
 See [docs/pi-hardware-setup.md](docs/pi-hardware-setup.md) for the full first-boot walkthrough: flashing the SD card, enabling UART, wiring the RVR+ to the Pi, installing the Sphero SDK, and running the control loop against the real robot. Allow 2–3 hours per Pi for a cold setup.
 
-The `SpheroRobot` implementation is still a TODO in [robot.py](robot.py); the loop currently drives `FakeRobot` everywhere. On the Pi, swap the one `FakeRobot(...)` line in `control_loop.py` once the SDK is talking to the hardware.
+`SpheroRobot` is **written** in [robot.py](robot.py) but **untested against hardware** — select it with `ROBOT_HARDWARE=sphero`; expect to tune the SDK sensor/drive calls on the real robot. Default is `fake`. For the camera, see Step 12 of the hardware guide (`apt install python3-picamera2`, set the `CAMERA_*` env vars).
 
 ## Related
 
-- `../robot-rumble-sf` — SFDX project: Lightning App Page dashboard LWC, Case → Flow → Slack, permission set, custom fields
+- `../robot-rumble-sf` — SFDX project: dashboard LWC, Case → Flow → Slack, permission set, custom fields, the Slack command cheat sheet
+- `../robot-rumble-camera-host` — standalone Flask/Heroku app that holds the latest camera frame per robot and serves it to the dashboard
 - Data Cloud Data Graph: `RobotLiveExtended_DG` (Real-Time; supersedes the original `RobotLive_DG`, which can't be edited in place)
 - Slack channels: `#rvr-edi`, `#rvr-lon`
 
