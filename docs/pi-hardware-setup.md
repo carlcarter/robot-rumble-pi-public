@@ -353,7 +353,22 @@ On the day you want this: **pull the power → the Pi reboots → the control lo
 
 We do this with a **systemd service**. Important: the auto-start is controlled by whether the service is *enabled*, **not** by a flag in `.env` — systemd starts the loop before Python ever reads `.env`, so an in-app flag can't gate boot. The on/off switch is `systemctl enable` / `disable` (below). Enable it for the event; leave it disabled while you're testing so it doesn't relaunch every time you reboot.
 
-**1. Create the service file** (`sudo nano /etc/systemd/system/robot-rumble.service`):
+> **The service does not exist until you create it.** A fresh Pi has no `robot-rumble` service — `systemctl status robot-rumble` will say *"Unit robot-rumble.service could not be found."* until you do the first-time setup below. Running `python control_loop.py` by hand does NOT create it. Do this once per Pi (Edinburgh and London both).
+
+#### First-time setup (once per Pi)
+
+**1. Check the paths the service needs** (so the file is correct — getting these wrong is the only thing that trips this up):
+
+```bash
+whoami                                      # the Linux user, e.g. carl-edi (London: carl-lon)
+ls ~/rvr/bin/python                         # the venv Python
+ls ~/robot-rumble-code/control_loop.py      # the control loop
+grep MAX_ITERATIONS ~/robot-rumble-code/.env   # must be 0 (run forever, not a 5s smoke test)
+```
+
+If the venv isn't at `~/rvr`, find it with `ls ~/*/bin/python` and use that path below. If `MAX_ITERATIONS` isn't `0`, edit `.env` and set it.
+
+**2. Create the service file** (`sudo nano /etc/systemd/system/robot-rumble.service`):
 
 ```ini
 [Unit]
@@ -365,7 +380,7 @@ Wants=network-online.target
 Type=simple
 User=carl-edi
 WorkingDirectory=/home/carl-edi/robot-rumble-code
-# Run the venv Python directly (no need to "activate"); MAX_ITERATIONS=0 = run forever.
+# Run the venv Python directly (no need to "activate"); MAX_ITERATIONS=0 in .env = run forever.
 ExecStart=/home/carl-edi/rvr/bin/python /home/carl-edi/robot-rumble-code/control_loop.py
 Restart=always
 RestartSec=5
@@ -377,13 +392,19 @@ StandardError=journal
 WantedBy=multi-user.target
 ```
 
-Adjust `User`, `WorkingDirectory`, and the venv path (`~/rvr/bin/python`) to match your Pi. Set `MAX_ITERATIONS=0` in `.env` so the loop runs until stopped. (`EnvironmentFile=` isn't needed — the app loads `.env` itself from its working directory.)
+> **London / per-Pi note:** change **every** `carl-edi` above to that Pi's user (e.g. `carl-lon`) — it appears three times (`User`, `WorkingDirectory`, `ExecStart`). If the username and home path match, nothing else changes. Save/exit nano with `Ctrl+O`, `Enter`, `Ctrl+X`.
 
-**2. Register it after creating or editing the file:**
+`EnvironmentFile=` isn't needed — the app loads `.env` itself from its `WorkingDirectory`.
+
+**3. Register the new file with systemd:**
 
 ```bash
 sudo systemctl daemon-reload
 ```
+
+(Re-run `daemon-reload` any time you edit the `.service` file.)
+
+Then turn it on (next section).
 
 ### Turn auto-start ON (do this for the event)
 
@@ -393,6 +414,14 @@ systemctl status robot-rumble                # confirm it's "active (running)"
 ```
 
 From now on, a power-pull/reboot relaunches everything automatically. `Restart=always` also means if the loop crashes, systemd restarts it within 5 s.
+
+Confirm it's really running, then verify it survives a reboot:
+
+```bash
+journalctl -u robot-rumble -f     # expect "Using FakeRobot…" / "Command subscriber started"; Ctrl+C to stop watching
+sudo reboot                        # then SSH back in after ~60s and re-check:
+systemctl status robot-rumble      # should be active (running) with no keyboard/screen touched
+```
 
 ### Turn auto-start OFF (do this while testing)
 
